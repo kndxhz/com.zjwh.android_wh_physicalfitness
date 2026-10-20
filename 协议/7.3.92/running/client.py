@@ -84,7 +84,8 @@ class RunningClient(BaseNetSecClient):
 
     def submit_record(self, save_body: dict) -> dict:
         """核心跑步记录结算上报 (/api/v70260/runnings/save/record)"""
-        return self.execute_request("POST", URL_SAVE_RECORD, body_plain=save_body)
+        # 服务端结算 + OBS 回读可能超过默认 20s，避免已入库却报超时
+        return self.execute_request("POST", URL_SAVE_RECORD, body_plain=save_body, timeout=60)
 
     def get_rundetail_config(self, sport_type: int = 1) -> dict:
         """拉取跑步详情页配置 (/api/v70340/activity/rundetail/config)"""
