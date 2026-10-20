@@ -22,6 +22,25 @@ from .config import (
 from .models import RunRecordDetail
 
 
+def extract_record_list(res: Any) -> List[Dict[str, Any]]:
+    """兼容 data 为数组或分页对象的多种历史记录响应结构"""
+    if not isinstance(res, dict):
+        return []
+    data = res.get("data")
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = []
+        for key in ("recordList", "records", "list", "rows"):
+            value = data.get(key)
+            if isinstance(value, list):
+                items = value
+                break
+    else:
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
 class HistoryClient(BaseNetSecClient):
     """运动世界校园 7.3.92 历史成绩与回查客户端"""
 

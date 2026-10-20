@@ -13,7 +13,7 @@ for p in [cur_dir, parent_dir]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from history.client import HistoryClient
+from history.client import HistoryClient, extract_record_list
 
 
 def main():
@@ -38,7 +38,7 @@ def main():
 
     records_res = client.get_run_records(page_num=args.page)
     if isinstance(records_res, dict) and records_res.get("error") == 10000 and "data" in records_res:
-        items = records_res["data"].get("recordList", []) or []
+        items = extract_record_list(records_res)
         print(f"历史记录: 页码={args.page} 条数={len(items)}")
         for it in items[:5]:
             status_str = "达标" if it.get("status") == 1 or it.get("isValid") else f"状态码={it.get('status')}"
