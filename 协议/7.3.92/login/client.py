@@ -7,7 +7,7 @@ import sys
 import time
 import urllib.request
 import uuid
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Union
 
 # 兼容包引用与单文件直跑
 cur_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,6 +21,8 @@ try:
         URL_CHECK_GEE_USE,
         URL_GEE_VALIDATE,
         URL_LOGIN,
+        URL_USER_LOGOUT,
+        URL_USER_LOGOUT_LEGACY,
         LOGIN_CAPTCHA_ID,
         DEFAULT_DEVICE_CONFIG,
     )
@@ -31,6 +33,8 @@ except (ImportError, ValueError):
         URL_CHECK_GEE_USE,
         URL_GEE_VALIDATE,
         URL_LOGIN,
+        URL_USER_LOGOUT,
+        URL_USER_LOGOUT_LEGACY,
         LOGIN_CAPTCHA_ID,
         DEFAULT_DEVICE_CONFIG,
     )
@@ -71,6 +75,14 @@ class LoginClient:
 
         if custom_headers:
             headers.update(custom_headers)
+
+        # 带鉴权头的接口（如登出）需要 tokenSign
+        if custom_headers and ("token" in custom_headers or "uid" in custom_headers):
+            headers["tokenSign"] = compute_token_sign({
+                "timeStamp": str(now_ms),
+                "token": str(headers.get("token", "")),
+                "uid": str(headers.get("uid", "")),
+            })
 
         # 1. 对全部 Header 生成 headerSign
         h_wire, h_resp_key = self.crypto.encrypt_request(
@@ -125,6 +137,31 @@ class LoginClient:
             "uuid": session_uuid
         }
         return self.execute_request(URL_LOGIN, login_body, custom_headers=custom_headers)
+
+    def logout(self,
+               uid: Union[int, str],
+               token: str,
+               unid: Optional[Union[int, str]] = None) -> Dict[str, Any]:
+        """服务端登出：优先 v61300/user/userLogout，失败回退 v6/user/logout"""
+        auth_headers = {"uid": str(uid), "token": str(token)}
+        if unid is not None:
+            auth_headers["unid"] = str(unid)
+
+        last_res: Any = None
+        for url in (URL_USER_LOGOUT, URL_USER_LOGOUT_LEGACY):
+            res = self.execute_request(url, {}, custom_headers=auth_headers)
+            last_res = res
+            if isinstance(res, dict):
+                error = res.get("error")
+                if res and error in (10000, None):
+                    result = dict(res)
+                    result["_endpoint"] = url
+                    return result
+        if isinstance(last_res, dict):
+            result = dict(last_res)
+            result["_endpoint"] = URL_USER_LOGOUT_LEGACY
+            return result
+        return {"error": -1, "message": str(last_res), "_endpoint": URL_USER_LOGOUT_LEGACY}
 
     def login(self,
               username: str,

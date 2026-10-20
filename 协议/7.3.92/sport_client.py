@@ -59,6 +59,19 @@ class SportClient792:
         self.history.set_credentials(self.uid, self.token, self.unid)
         self.ads.set_credentials(self.uid, self.token, self.unid)
 
+    def ensure_unid(self) -> Optional[str]:
+        """未显式传 --unid 时，从个人档案自动补全学校 UNID。"""
+        if self.unid:
+            return self.unid
+        if not self.token:
+            return None
+        prof = self.get_user_profile()
+        if prof and getattr(prof, "unid", None):
+            self.unid = str(prof.unid)
+            self.set_credentials(self.uid or "", self.token, self.unid)
+            return self.unid
+        return None
+
     # 1. 登录认证子系统
     def login(self, username: str, password: str, progress_callback: Optional[Callable[[str], None]] = None) -> LoginResult:
         """全自动登录 (checkGeeUse -> 极验 v4 无头识别与拟人滑动 -> geevalidate -> login)"""
@@ -67,21 +80,32 @@ class SportClient792:
             self.set_credentials(uid=res.user.uid, token=res.user.token, unid=res.user.unid)
         return res
 
+    def logout(self) -> Dict[str, Any]:
+        """注销当前 Token 对应的服务端会话"""
+        if not self.token:
+            return {"error": -1, "message": "缺少Token"}
+        res = self.login_client.logout(uid=self.uid or "", token=self.token, unid=self.unid)
+        if isinstance(res, dict) and res.get("error") in (10000, None):
+            self.token = None
+        return res
+
     # 2. 时间与档案子系统
     def sync_server_time(self) -> ServerTime:
         return self.profile.get_server_time()
-
     def get_user_profile(self) -> Optional[UserProfileDetails]:
         return self.profile.get_user_info()
 
     # 3. 规则与围栏子系统
     def get_run_policy(self, run_mode: int = 1) -> Optional[RunRule]:
+        self.ensure_unid()
         return self.policy.get_run_policy(run_mode=run_mode)
 
     def get_geo_fences(self) -> list:
+        self.ensure_unid()
         return self.policy.get_geo_fence()
 
     def get_semester_progress(self, run_mode: int = 1) -> Optional[SemesterInfo]:
+        self.ensure_unid()
         return self.policy.get_semester_info(run_mode=run_mode)
 
     # 4. 跑步提交子系统 (支持 sport_type=1 计分跑 与 sport_type=6 自由跑)
@@ -92,9 +116,10 @@ class SportClient792:
                     progress_callback: Optional[Callable[[str], None]] = None) -> RunningSubmissionResult:
         """
         全时序拟人跑步提交流程：
-        - sport_type=1: 计分跑（校园考核，强制经过 5 个必经打卡点与围栏范围）；
-        - sport_type=6: 自由跑（阳光跑，自由路线，无需必经打卡点）。
+        - sport_type=1: 计分跑（校园考核，强制经过全部下发点位与围栏范围）；
+        - sport_type=6: 自由跑；若学校仍下发点位，同样强制经过。
         """
+        self.ensure_unid()
         return self.running.execute_full_run(
             target_distance_m=target_distance_m,
             target_time_sec=target_time_sec,

@@ -6,6 +6,8 @@ DEFAULT_HOST_DISCOVERY = "https://discovery.gxapp.iydsj.com"
 URL_CHECK_GEE_USE = f"{DEFAULT_HOST_RUN}/api/v65/security/checkGeeUse"
 URL_GEE_VALIDATE = f"{DEFAULT_HOST_RUN}/api/v70270/security/geevalidate"
 URL_LOGIN = f"{DEFAULT_HOST_RUN}/api/v70100/login"
+URL_USER_LOGOUT = f"{DEFAULT_HOST_RUN}/api/v61300/user/userLogout"
+URL_USER_LOGOUT_LEGACY = f"{DEFAULT_HOST_RUN}/api/v6/user/logout"
 
 # 极验登录 Captcha ID
 LOGIN_CAPTCHA_ID = "3b02ad39bd099fd3a8336d9347a189ab"
