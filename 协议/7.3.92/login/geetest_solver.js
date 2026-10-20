@@ -1,30 +1,58 @@
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
+function tryRequirePlaywright(id) {
+  try {
+    const mod = require(id);
+    return mod && mod.chromium ? mod : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function resolvePlaywright() {
   if (process.env.PLAYWRIGHT_PATH) {
-    try {
-      return require(process.env.PLAYWRIGHT_PATH);
-    } catch (e) {
-      console.warn('警告: 从 PLAYWRIGHT_PATH 加载失败:', e.message);
-    }
+    const mod = tryRequirePlaywright(process.env.PLAYWRIGHT_PATH);
+    if (mod) return mod;
+    console.warn('警告: 从 PLAYWRIGHT_PATH 加载失败:', process.env.PLAYWRIGHT_PATH);
   }
 
-  try {
-    return require('playwright');
-  } catch (e) {}
+  for (const id of ['playwright', 'playwright-core']) {
+    const mod = tryRequirePlaywright(id);
+    if (mod) return mod;
+  }
 
-  const fallbacks = [
+  const candidates = [
+    path.join(__dirname, 'node_modules', 'playwright'),
+    path.join(__dirname, 'node_modules', 'playwright-core'),
+    path.join(__dirname, '..', 'node_modules', 'playwright'),
+    path.join(__dirname, '..', 'node_modules', 'playwright-core'),
     'D:/Work/Tools/Node/npm-global/node_modules/@playwright/mcp/node_modules/playwright',
     'D:/Work/Tools/Node/npm-global/node_modules/playwright',
   ];
-  for (const fb of fallbacks) {
+
+  // npm 全局安装目录（Windows: %APPDATA%\npm\node_modules）
+  const globalRoots = [];
+  if (process.env.APPDATA) {
+    globalRoots.push(path.join(process.env.APPDATA, 'npm', 'node_modules'));
+  }
+  if (process.env.LOCALAPPDATA) {
+    globalRoots.push(path.join(process.env.LOCALAPPDATA, 'npm', 'node_modules'));
+  }
+  for (const root of globalRoots) {
+    candidates.push(path.join(root, 'playwright'));
+    candidates.push(path.join(root, 'playwright-core'));
+    candidates.push(path.join(root, '@playwright', 'mcp', 'node_modules', 'playwright'));
+    candidates.push(path.join(root, '@playwright', 'cli', 'node_modules', 'playwright-core'));
+  }
+
+  for (const fb of candidates) {
     if (fs.existsSync(fb)) {
-      try {
-        return require(fb);
-      } catch (e) {}
+      const mod = tryRequirePlaywright(fb);
+      if (mod) return mod;
     }
   }
 
@@ -44,14 +72,55 @@ function resolveChromiumExecutable() {
     return devFallback;
   }
 
-  const systemPaths = [
+  // 复用 Playwright 已下载的 Chromium（跨平台）
+  const browserRoots = [];
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) {
+    browserRoots.push(process.env.PLAYWRIGHT_BROWSERS_PATH);
+  }
+  if (process.env.LOCALAPPDATA) {
+    browserRoots.push(path.join(process.env.LOCALAPPDATA, 'ms-playwright'));
+  }
+  browserRoots.push(path.join(process.env.HOME || '', '.cache', 'ms-playwright'));
+  for (const root of browserRoots) {
+    if (!root || !fs.existsSync(root)) continue;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(root).filter(name => name.startsWith('chromium-'));
+    } catch (e) {}
+    for (const entry of entries) {
+      const candidates = [
+        path.join(root, entry, 'chrome-win64', 'chrome.exe'),
+        path.join(root, entry, 'chrome-win', 'chrome.exe'),
+        path.join(root, entry, 'chrome-linux', 'chrome'),
+        path.join(root, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+      ];
+      for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+  }
+
+  // 系统已安装的 Chrome / Edge
+  const systemCandidates = [];
+  if (process.env.PROGRAMFILES) {
+    systemCandidates.push(path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    systemCandidates.push(path.join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+  }
+  if (process.env['PROGRAMFILES(X86)']) {
+    systemCandidates.push(path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'));
+    systemCandidates.push(path.join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'));
+  }
+  if (process.env.LOCALAPPDATA) {
+    systemCandidates.push(path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+  }
+  systemCandidates.push(
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-  ];
-  for (const sp of systemPaths) {
+  );
+  for (const sp of systemCandidates) {
     if (fs.existsSync(sp)) {
       return sp;
     }
@@ -202,6 +271,9 @@ async function solveOnce(captchaId, port) {
       const sliceEl = document.querySelector('.geetest_slice_bg');
       const bgUrl = cleanUrl(window.getComputedStyle(bgEl).backgroundImage);
       const sliceUrl = cleanUrl(window.getComputedStyle(sliceEl).backgroundImage);
+      const proxied = (u) => (u && !u.startsWith('data:'))
+        ? ('/img?url=' + encodeURIComponent(u))
+        : u;
       const bgRect = bgEl.getBoundingClientRect();
       const sliceRect = sliceEl.getBoundingClientRect();
 
@@ -215,8 +287,8 @@ async function solveOnce(captchaId, port) {
         });
       }
 
-      const bgImg = await loadImage(bgUrl);
-      const sliceImg = await loadImage(sliceUrl);
+      const bgImg = await loadImage(proxied(bgUrl));
+      const sliceImg = await loadImage(proxied(sliceUrl));
 
       const bgCanvas = document.createElement('canvas');
       bgCanvas.width = bgImg.naturalWidth;
@@ -360,6 +432,43 @@ async function solveOnce(captchaId, port) {
   }
 }
 
+function proxyImage(target, res, redirects = 0) {
+  let parsed;
+  try {
+    parsed = new URL(target);
+  } catch (e) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('bad image url');
+    return;
+  }
+  const client = parsed.protocol === 'https:' ? https : http;
+  const req = client.get(parsed, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+      'Referer': 'https://www.geetest.com/'
+    }
+  }, (r) => {
+    if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location && redirects < 3) {
+      r.resume();
+      proxyImage(new URL(r.headers.location, parsed).toString(), res, redirects + 1);
+      return;
+    }
+    res.writeHead(r.statusCode || 200, {
+      'Content-Type': r.headers['content-type'] || 'image/png',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-store'
+    });
+    r.pipe(res);
+  });
+  req.on('error', (e) => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/plain' });
+      res.end('image proxy error: ' + e.message);
+    }
+  });
+  req.setTimeout(15000, () => req.destroy());
+}
+
 async function solveGeetestV4(captchaId, maxRetries = 3) {
   const localGt4 = fs.readFileSync(path.join(__dirname, 'assets', 'gt4.js'));
   const server = http.createServer((req, res) => {
@@ -367,6 +476,16 @@ async function solveGeetestV4(captchaId, maxRetries = 3) {
       res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
       res.end(localGt4);
       return;
+    }
+    if (req.url.startsWith('/img?url=')) {
+      let target = '';
+      try {
+        target = new URL(req.url, 'http://127.0.0.1').searchParams.get('url') || '';
+      } catch (e) {}
+      if (target) {
+        proxyImage(target, res);
+        return;
+      }
     }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(HTML_CONTENT);
