@@ -14,6 +14,7 @@ for p in [cur_dir, parent_dir]:
         sys.path.insert(0, p)
 
 from history.client import HistoryClient, extract_record_list
+from history.models import record_status_text
 
 
 def main():
@@ -41,7 +42,7 @@ def main():
         items = extract_record_list(records_res)
         print(f"历史记录: 页码={args.page} 条数={len(items)}")
         for it in items[:5]:
-            status_str = "达标" if it.get("status") == 1 or it.get("isValid") else f"状态码={it.get('status')}"
+            status_str = record_status_text(it)
             print(f"记录明细: rrid={it.get('rrid')} 里程={it.get('totalDis')}m 耗时={it.get('totalTime')}s 状态={status_str}")
     else:
         err_msg = records_res.get("message") if isinstance(records_res, dict) else "网络异常"

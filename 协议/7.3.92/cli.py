@@ -14,6 +14,7 @@ if cur_dir not in sys.path:
 
 from sport_client import SportClient792
 from history.client import extract_record_list
+from history.models import record_status_text
 
 
 def main():
@@ -122,7 +123,7 @@ def main():
                 recs = extract_record_list(h_res)
                 print(f"历史记录: 条数={len(recs)}")
                 for r in recs:
-                    status_str = "达标" if r.get("status") == 1 or r.get("isValid") else f"状态码={r.get('status')}"
+                    status_str = record_status_text(r)
                     print(f"记录明细: rrid={r.get('rrid')} 里程={r.get('totalDis')}m 耗时={r.get('totalTime')}s 状态={status_str}")
             else:
                 err_msg = h_res.get("message") if isinstance(h_res, dict) else "网络异常"
