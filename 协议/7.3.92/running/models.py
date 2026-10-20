@@ -26,16 +26,24 @@ class GpsPoint:
 
 @dataclass
 class FivePoint:
-    """必经打卡目标点"""
+    """必经打卡目标点。
+
+    服务端下发点位同时带两套坐标：
+      lat / lon   -> BD-09
+      glat / glon -> GCJ-02（服务端判定轨迹是否经过点位时使用）
+    """
     lat: float
     lon: float
     isFixed: int = 1
     isPass: bool = True
     pointName: str = ""
     position: int = 0
+    glat: Optional[float] = None
+    glon: Optional[float] = None
+    radius: float = 0.0
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "lat": self.lat,
             "lon": self.lon,
             "isFixed": self.isFixed,
@@ -43,6 +51,12 @@ class FivePoint:
             "pointName": self.pointName,
             "position": self.position
         }
+        if self.glat is not None and self.glon is not None:
+            data["glat"] = self.glat
+            data["glon"] = self.glon
+        if self.radius:
+            data["radius"] = self.radius
+        return data
 
 
 @dataclass

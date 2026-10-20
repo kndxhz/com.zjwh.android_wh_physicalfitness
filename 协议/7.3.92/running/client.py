@@ -25,7 +25,7 @@ from .config import (
     OBS_BUCKET_NAME
 )
 from .models import RunningSubmissionResult
-from .builder import RunningTrackBuilder
+from .builder import RunningTrackBuilder, check_checkpoint_hits
 
 
 class RunningClient(BaseNetSecClient):
@@ -111,19 +111,40 @@ class RunningClient(BaseNetSecClient):
             self.telemetry.send_startup_pv(uid=int(self.uid), unid=int(self.unid))
             self.telemetry.send_page_exposure(unid=int(self.unid))
 
-        # 2. 拉取电子围栏与打卡点
-        fences = self.policy.get_geo_fence()
+        # 2. 拉取电子围栏与打卡点（优先 runModePolicy，getGeoFenceForRun 兜底）
+        fences = self.policy.get_geo_fence(run_mode=1)
         checkpoints = []
         center_lat, center_lng = 0.0, 0.0  # 默认通用占位坐标
         if fences and len(fences) > 0:
             f = fences[0]
-            checkpoints = [{"lat": cp.lat, "lng": cp.lng, "name": cp.name} for cp in f.check_points]
-            if f.polygon_points:
-                center_lat = f.polygon_points[0].lat
-                center_lng = f.polygon_points[0].lng
-            log(f"围栏关联: 成功 名称={f.fence_name} 点数={len(checkpoints)}")
+            for idx, cp in enumerate(f.check_points):
+                checkpoints.append({
+                    "lat": cp.lat,
+                    "lon": cp.lng,
+                    "glat": cp.glat,
+                    "glon": cp.glon,
+                    "isFixed": cp.is_fixed,
+                    "radius": cp.radius,
+                    "id": cp.point_id,
+                    "name": cp.name or f"P_{idx + 1}",
+                })
+            center = f.center_gcj()
+            if center:
+                center_lat, center_lng = center
+            fixed_count = sum(1 for cp in checkpoints if cp.get("isFixed") == 1)
+            log(f"围栏关联: 成功 名称={f.fence_name} 边界点={len(f.polygon_points)} "
+                f"打卡点={len(checkpoints)} 必经点={fixed_count} 坐标=GCJ-02")
         else:
             log("围栏关联: 未命中 策略=环形合规兜底")
+
+        if sport_type == 1 and not checkpoints:
+            log("打卡点校验: 失败 未获取到学校打卡点（可能触发 10603 限流，请 5 分钟后重试）")
+            return RunningSubmissionResult(
+                success=False,
+                message="未获取到打卡点，已阻止计分跑提交（请 5 分钟后重试）"
+            )
+        if sport_type != 1 and not checkpoints:
+            log("打卡点: 未获取到（按无点位自由跑处理）")
 
         # 3. 拟人运动学轨迹生成
         stop_time_ms = t_now_ms
@@ -139,6 +160,21 @@ class RunningClient(BaseNetSecClient):
             total_time_sec=target_time_sec,
             start_time_ms=start_time_ms
         )
+
+        # 3.1 打卡点命中校验（GCJ-02，服务端同一坐标系）
+        hit_stats = check_checkpoint_hits(gps_pts, checkpoints)
+        if hit_stats:
+            hit_count = sum(1 for h in hit_stats if h["hit"])
+            worst = max(h["dist_m"] for h in hit_stats)
+            log(f"打卡点校验: {hit_count}/{len(hit_stats)} 命中 最差={worst:.1f}m")
+            misses = [h for h in hit_stats if not h["hit"]]
+            if misses:
+                detail = ", ".join(f"{h['name']}({h['dist_m']}m)" for h in misses[:5])
+                log(f"打卡点校验: 失败 未命中={detail}")
+                return RunningSubmissionResult(
+                    success=False,
+                    message=f"轨迹未经过全部打卡点: {detail}"
+                )
 
         save_record, obs_payload, obj_key = builder.build_submission_payload(
             total_distance_m=target_distance_m,
