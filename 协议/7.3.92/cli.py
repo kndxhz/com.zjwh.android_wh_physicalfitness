@@ -5,12 +5,15 @@ import sys
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 if cur_dir not in sys.path:
     sys.path.insert(0, cur_dir)
 
 from sport_client import SportClient792
+from history.client import extract_record_list
 
 
 def main():
@@ -21,6 +24,7 @@ def main():
     parser.add_argument("--uid", help="已有用户 UID")
     parser.add_argument("--unid", help="已有学校 UNID")
     parser.add_argument("--sync-time", action="store_true", help="执行服务端时间对齐")
+    parser.add_argument("--logout", action="store_true", help="注销当前 Token 对应的服务端登录会话")
     parser.add_argument("--rules", action="store_true", help="查询跑步规则与电子围栏")
     parser.add_argument("--profile", action="store_true", help="查询学生个人档案")
     parser.add_argument("--history", action="store_true", help="查询最近历史记录与打卡日历")
@@ -48,12 +52,27 @@ def main():
             return
         print(f"登录成功: token={client.token} uid={client.uid} unid={client.unid}")
 
-    # 2. 时钟对齐
-    if args.sync_time or (not args.rules and not args.profile and not args.history and not args.run and not args.watch_ad):
+    # 2. 服务端登出
+    if args.logout:
+        if not client.token:
+            print("登出: 失败 原因=缺少Token")
+        else:
+            lo_res = client.logout()
+            if isinstance(lo_res, dict) and lo_res.get("error") in (10000, None):
+                endpoint = lo_res.get("_endpoint", "")
+                print(f"登出: 成功 uid={client.uid or args.uid} endpoint={endpoint}")
+                print("当前 Token 已失效，请从本地配置中移除。")
+            else:
+                code = lo_res.get("error") if isinstance(lo_res, dict) else -1
+                msg = lo_res.get("message") if isinstance(lo_res, dict) else str(lo_res)
+                print(f"登出: 失败 code={code} 原因={msg}")
+
+    # 3. 时钟对齐
+    if args.sync_time or (not args.rules and not args.profile and not args.history and not args.run and not args.watch_ad and not args.logout):
         st = client.sync_server_time()
         print(f"时钟同步: 服务端时间={st.server_datetime} 偏斜={st.offset_seconds:+.3f}s")
 
-    # 3. 个人档案
+    # 4. 个人档案
     if args.profile:
         if not client.token:
             print("个人档案: 失败 原因=缺少Token")
@@ -64,7 +83,7 @@ def main():
             else:
                 print("个人档案: 失败 原因=查询为空")
 
-    # 4. 跑步规则与围栏
+    # 5. 跑步规则与围栏
     if args.rules:
         if not client.token or not client.uid:
             print("跑步规则: 失败 原因=缺少Token或UID")
@@ -73,11 +92,15 @@ def main():
             fences = client.get_geo_fences()
             mode_name = "计分跑" if args.mode == 1 else "自由跑"
             if rule:
-                print(f"跑步规则: 模式={mode_name} 单日上限={rule.day_goal}m 单次最低={rule.min_distance}m 配速={rule.speed_top}~{rule.speed_bottom}分/km 步频={rule.step_top}~{rule.step_bottom}步/分 围栏数={len(fences)}")
+                check_count = sum(len(f.check_points) for f in fences)
+                fixed_count = sum(1 for f in fences for p in f.check_points if p.is_fixed == 1)
+                print(f"跑步规则: 模式={mode_name} 单日上限={rule.day_goal}m 单次最低={rule.min_distance}m 配速={rule.speed_top}~{rule.speed_bottom}分/km 步频={rule.step_top}~{rule.step_bottom}步/分 围栏数={len(fences)} 打卡点={check_count} 必经点={fixed_count}")
+                if check_count == 0:
+                    print("提示: 未获取到打卡点；若刚频繁请求拉点接口，请 5 分钟后重试（10603 限流）。")
             else:
                 print(f"跑步规则: 失败 模式={mode_name} 原因=规则查询为空")
 
-    # 5. 广告模拟
+    # 6. 广告模拟
     if args.watch_ad:
         ad_res = client.watch_ad(
             ad_position=args.ad_pos,
@@ -89,14 +112,14 @@ def main():
         else:
             print(f"广告模拟: 失败 位置={args.ad_pos} 原因={ad_res.message}")
 
-    # 6. 历史记录
+    # 7. 历史记录
     if args.history:
         if not client.token or not client.uid:
             print("历史记录: 失败 原因=缺少Token或UID")
         else:
             h_res = client.get_history_records(page_num=1, page_size=5)
             if isinstance(h_res, dict) and h_res.get("error") == 10000:
-                recs = h_res.get("data", {}).get("recordList", []) or []
+                recs = extract_record_list(h_res)
                 print(f"历史记录: 条数={len(recs)}")
                 for r in recs:
                     status_str = "达标" if r.get("status") == 1 or r.get("isValid") else f"状态码={r.get('status')}"
@@ -105,7 +128,7 @@ def main():
                 err_msg = h_res.get("message") if isinstance(h_res, dict) else "网络异常"
                 print(f"历史记录: 失败 原因={err_msg}")
 
-    # 7. 拟人跑步提交
+    # 8. 拟人跑步提交
     if args.run:
         if not client.token or not client.uid:
             print("跑步提交: 失败 原因=缺少Token或UID")
