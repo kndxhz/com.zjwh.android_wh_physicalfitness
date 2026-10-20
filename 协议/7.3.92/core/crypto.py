@@ -9,6 +9,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import Optional
 
 # --- Pure Python AES-128 ---
 S_BOX = [
@@ -281,6 +282,53 @@ class NetSecClient:
                 except Exception:
                     return biz_bytes.decode("utf-8", errors="replace")
         return resp_dict
+
+# 部分接口（如 /api/v560/get/1/distance/1 拉打卡点）要求 body 内再嵌一层
+# "runec" 信封。其格式与普通请求信封不同：platform=1、时间戳毫秒、
+# keyData 固定（keyDataFour 为会话首毫秒字符串末 12 位）。
+ENVELOPE_SALT_ALPHABET = "+kot8A*B45jF6CD@a!UVWubcdKLZ{efgMpNOxyz01PQ}Rn)Tvw23XYh(iG7rsEqJHI9+Slm/"
+ENVELOPE_KEYDATA_ONE = "nhang.school"
+ENVELOPE_KEYDATA_TWO = "5K0E8400-E29"
+ENVELOPE_KEYDATA_THREE = "597DEA1AFB49"
+
+
+def _normalize_envelope_key_data(value: str) -> str:
+    raw = value.encode("utf-8")
+    if len(raw) <= 7:
+        return value + "".join(
+            random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+                           k=12 - len(raw))
+        )
+    if len(raw) >= 13:
+        return raw[-12:].decode("utf-8", "replace")
+    return value
+
+
+def build_observed_envelope(plaintext: str,
+                            first_ms: Optional[int] = None,
+                            ts_ms: Optional[int] = None) -> str:
+    """构造 runec 内嵌信封（observed 序：k,p,d,h,t）。"""
+    now = int(time.time() * 1000)
+    first_ms = first_ms if first_ms is not None else now
+    ts_ms = ts_ms if ts_ms is not None else now
+    kd4 = _normalize_envelope_key_data("{:.6f}".format(float(first_ms)))
+    container = json.dumps({
+        "data": base64.b64encode(plaintext.encode("utf-8")).decode("ascii"),
+        "timeStamp": ts_ms,
+        "platform": 1,
+        "keyDataOne": ENVELOPE_KEYDATA_ONE,
+        "keyDataTwo": ENVELOPE_KEYDATA_TWO,
+        "keyDataThree": ENVELOPE_KEYDATA_THREE,
+        "keyDataFour": kd4,
+    }, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    req_key = "".join(random.choice(ENVELOPE_SALT_ALPHABET) for _ in range(16)).encode("ascii")
+    d = base64.b64encode(aes128_cbc_encrypt(container, req_key)).decode("ascii")
+    h = hashlib.md5(container).hexdigest()
+    rsa_client = NetSecClient()
+    k = base64.b64encode(rsa_pkcs1_v15_encrypt(req_key, rsa_client.n, rsa_client.e)).decode("ascii")
+    return '{"k":"%s","p":101,"d":"%s","h":"%s","t":0}' % (k, d, h)
+
 
 def compute_token_sign(params, salt="2slhe02lsfiwowlcixisla_sls-_slaor"):
     valid_items = [(k, str(v)) for k, v in params.items() if v is not None and k.lower() != "signature"]

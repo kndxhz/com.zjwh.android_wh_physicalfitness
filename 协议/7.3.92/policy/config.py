@@ -17,3 +17,7 @@ URL_GEO_FENCE = f"{HOST_RUN}/api/v1/getGeoFenceForRun"
 URL_SEMESTER_INFO = f"{HOST_RUN}/api/v41/running/getPersonalSemesterInfo"
 URL_SEMESTER_SUMMARY = f"{HOST_RUN}/api/v55/runnings/recordssummary/semester"
 URL_RUN_GOALS = f"{HOST_RUN}/api/run/goals/v70260/query"
+
+# 打卡点拉取（5 分钟内最多 3 次，命中 10603 限流）
+URL_RUN_POINTS = f"{HOST_RUN}/api/v560/get/1/distance/1"
+POINTS_SIGN_SALT = "2slhe02lsfiwowlcixisla_sls-_slaor"

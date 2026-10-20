@@ -2,3 +2,6 @@
 # Python cache
 __pycache__/
 *.pyc
+
+# 校园点位缓存（含坐标，勿提交）
+协议/7.3.92/points_cache.json
