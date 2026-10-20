@@ -1,0 +1,7 @@
+[project]
+name = "sw-campus-792"
+version = "0.1.0"
+description = "运动世界校园 7.3.92 纯协议工具"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
