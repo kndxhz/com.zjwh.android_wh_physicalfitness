@@ -184,8 +184,8 @@ class RunningClient(BaseNetSecClient):
             stop_time_ms=stop_time_ms,
             gps_points=gps_pts,
             five_points=five_pts,
-            sel_distance_m=2000,
-            sel_run_time_s=1200
+            sel_distance_m=target_distance_m,
+            sel_run_time_s=target_time_sec
         )
         log(f"轨迹合成: 成功 距离={target_distance_m}m 耗时={target_time_sec}s 点数={len(gps_pts)} 步数={total_steps} 配速={save_record["speed"]}")
 

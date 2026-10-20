@@ -322,6 +322,64 @@ def check_checkpoint_hits(points: List[GpsPoint],
     return stats
 
 
+def _wire_track_points(points: List[GpsPoint], start_time_ms: int) -> List[Dict[str, Any]]:
+    """生成 App/OBS 使用的轨迹点。
+
+    GpsPoint 内部是 GCJ-02；同时写入：
+      - lat/lon/lng = BD-09（与服务端打卡点 lat/lon 同系）
+      - gLat/gLng   = GCJ-02（服务端判定轨迹是否经过点位时使用）
+    这样无论服务端读哪一组坐标，都能落在正确位置。
+    """
+    wire = []
+    cumulative = 0.0
+    prev = None
+    last_idx = len(points) - 1
+    for idx, p in enumerate(points):
+        if prev is not None:
+            cumulative += haversine(prev.lat, prev.lon, p.lat, p.lon)
+        prev = p
+
+        glat, glon = float(p.lat), float(p.lon)
+        blat, blon = gcj02_to_bd09(glat, glon)
+        t_rel = max(0.0, (p.time - start_time_ms) / 1000.0)
+        pace_min = (1000.0 / (p.speed * 60.0)) if p.speed > 0 else 0.0
+        point_type = 5 if idx == 0 else (6 if idx == last_idx else 1)
+        wire.append({
+            "avgSpeed": round(pace_min, 4),
+            "accuracy": p.accuracy,
+            "bdA": 0.0,
+            "bdD": 0.0,
+            "bdG": 0,
+            "bdS": 0.0,
+            "coorType": "gcj02",
+            "count": 1,
+            "dtr": 0.0,
+            "flag": start_time_ms,
+            "gLat": round(glat, 7),
+            "gLng": round(glon, 7),
+            "gainTime": 0,
+            "id": idx,
+            "isValid": p.isValid,
+            "lat": round(blat, 7),
+            "lng": round(blon, 7),
+            "lon": round(blon, 7),
+            "locType": 1,
+            "locationId": "",
+            "queueNum": 0,
+            "radius": round(p.accuracy, 2),
+            "speed": round(pace_min, 4),
+            "state": 0,
+            "stepDistance": 0.0,
+            "time": p.time,
+            "totalDis": round(cumulative, 4),
+            "totalTime": int(round(t_rel)),
+            "type": point_type,
+            "validDis": round(cumulative, 4),
+            "validTime": int(round(t_rel)),
+        })
+    return wire
+
+
 class RunningTrackBuilder:
     """运动轨迹、传感器步频分桶与 7.3.92 报文组装构建器"""
 
@@ -486,7 +544,10 @@ class RunningTrackBuilder:
         complete = (total_distance_m >= sel_distance_m) and (total_time_sec >= sel_run_time_s)
         un_complete_reason = 0 if complete else 10
         avg_step_freq = round(total_steps * 60.0 / total_time_sec) if total_time_sec > 0 else 165
-        speed_val = round((total_distance_m / total_time_sec) * 1000) if total_time_sec > 0 else 2600
+        # 提交体 speed = 毫-分/公里（min/km × 1000），不是 m/s
+        speed_val = int(round(
+            (total_time_sec / total_distance_m) * (50.0 / 3.0) * 1000.0
+        )) if total_distance_m > 0 else 0
 
         # 1. 签名参数字典 (严格按照 7.3.92 规则)
         sign_map = {
@@ -507,7 +568,7 @@ class RunningTrackBuilder:
             "speed": speed_val,
             "sportType": self.sport_type,
             "startTime": start_time_ms,
-            "status": 1,
+            "status": 0,
             "stopTime": stop_time_ms,
             "themeId": 0,
             "totalAscent": 0,
@@ -537,10 +598,21 @@ class RunningTrackBuilder:
             speed_buckets.append(SpeedBucket(dist_per_bucket, b_start, b_end, queueNum=i + 1))
             step_buckets.append(StepBucket(steps_per_bucket, b_start, b_end, queueNum=i + 1))
 
-        all_loc_json = json.dumps([p.to_dict() for p in gps_points], separators=(",", ":"))
+        wire_points = _wire_track_points(gps_points, start_time_ms)
+        all_loc_json = json.dumps(wire_points, separators=(",", ":"))
         five_pt_json = json.dumps([p.to_dict() for p in five_points], separators=(",", ":")) if five_points else "[]"
         speed_json = json.dumps([b.to_dict() for b in speed_buckets], separators=(",", ":"))
         step_json = json.dumps([b.to_dict() for b in step_buckets], separators=(",", ":"))
+
+        # 提交体/OBS 的 fivePointJson 都是“包装对象字符串”（与真实 App 一致）
+        five_point_payload = {
+            "useZip": False,
+            "fivePointJson": five_pt_json,
+            "runAreaId": -1,
+            "geoFencesJson": "[]",
+            "freedomShowFence": False,
+        }
+        five_point_json = json.dumps(five_point_payload, separators=(",", ":")) if five_points else ""
 
         # 3. 组装 save/record 报文体
         first_pt = gps_points[0] if gps_points else GpsPoint(0.0, 0.0, start_time_ms)
@@ -553,13 +625,13 @@ class RunningTrackBuilder:
             "complete": complete,
             "errorCode": 0,
             "faceCheck": 0,
-            "fivePointJson": five_pt_json,
+            "fivePointJson": five_point_json,
             "geeToken": "",
             "getPrize": False,
             "goalId": None,
             "isUpload": False,
-            "latitude": first_pt.lat,
-            "longitude": first_pt.lon,
+            "latitude": wire_points[0]["lat"] if wire_points else first_pt.lat,
+            "longitude": wire_points[0]["lon"] if wire_points else first_pt.lon,
             "maxRunTime": 7200,
             "minSteps": 2000,
             "originalSign": original_sign,
@@ -575,7 +647,7 @@ class RunningTrackBuilder:
             "speedPerTenSec": [b.to_dict() for b in speed_buckets],
             "sportType": self.sport_type,
             "startTime": start_time_ms,
-            "status": 1,
+            "status": 0,
             "stepsPerTenSec": [b.to_dict() for b in step_buckets],
             "stopTime": stop_time_ms,
             "themeId": 0,
@@ -593,15 +665,22 @@ class RunningTrackBuilder:
         }
 
         # 4. 组装 OBS Gzip-Base64 载荷
+        # 真实 App 的 run_data / fixed_point_json 都是对象包装，
+        # allLocJson / fivePointJson 是其中的字符串字段。
+        run_data_wrap = {
+            "allLocJson": all_loc_json,
+            "useZip": False,
+        }
+        fixed_point_wrap = five_point_payload
         obs_payload = {
             "rrid": gzip_base64_encode(""),
             "uid": gzip_base64_encode(str(self.uid)),
             "uuid": gzip_base64_encode(self.uuid_str),
-            "run_data": gzip_base64_encode(all_loc_json),
+            "run_data": gzip_base64_encode(json.dumps(run_data_wrap, separators=(",", ":"))),
             "step_freq_json": gzip_base64_encode(step_json),
             "speed_json": gzip_base64_encode(speed_json),
             "segment_json": gzip_base64_encode("[]"),
-            "fixed_point_json": gzip_base64_encode(five_pt_json),
+            "fixed_point_json": gzip_base64_encode(json.dumps(fixed_point_wrap, separators=(",", ":"))),
             "runFaceCheck": gzip_base64_encode(""),
             "extension_json": gzip_base64_encode(""),
             "laps_json": gzip_base64_encode("")

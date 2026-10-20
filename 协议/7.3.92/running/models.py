@@ -46,6 +46,8 @@ class FivePoint:
         data = {
             "lat": self.lat,
             "lon": self.lon,
+            # 客户端 Bean 字段名是 lng；同时保留 lon 兼容服务端 DTO
+            "lng": self.lon,
             "isFixed": self.isFixed,
             "isPass": self.isPass,
             "pointName": self.pointName,
